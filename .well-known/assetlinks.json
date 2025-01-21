@@ -1,0 +1,9 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.example.memes_app",
+    "sha256_cert_fingerprints":
+    ["80:31:15:3D:33:82:CC:1F:33:EE:29:B0:6D:51:D8:8D:CA:23:42:AE:66:99:C0:16:BB:8B:78:89:67:40:92:11"]
+  }
+}]

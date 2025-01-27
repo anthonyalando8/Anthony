@@ -12,13 +12,13 @@ exports.populateInitialData = functions.https.onRequest(async (req, res) => {
   try {
     const usersSnapshot = await admin.database().ref("Users").once("value");
     const users = usersSnapshot.val();
-    console.log("Users", users);
+
     for (const userID in users) {
       if (Object.prototype.hasOwnProperty.call(users, userID)) {
         console.log("User ID:", userID);
         const userData = users[userID];
-        const followers = userData.followers || [];
-        const following = userData.following || [];
+        const followers = userData.followers ? Object.keys(userData.followers) : [];
+        const following = userData.following ? Object.keys(userData.following) : [];
         const followersToken = [];
         const followingTokens = [];
 
@@ -43,7 +43,7 @@ exports.populateInitialData = functions.https.onRequest(async (req, res) => {
         }
 
         usersInformation[userID] = {
-          myToken: userData.settings.notifications.deviceToken || null,
+          myToken: userData.settings?.notifications?.deviceToken || null,
           friendsToken: followersToken.concat(followingTokens),
         };
       }
@@ -67,34 +67,35 @@ function initializeUsersInformation() {
         const users = usersSnapshot.val();
         for (const userID in users) {
           if (Object.prototype.hasOwnProperty.call(users, userID)) {
+            console.log("User ID:", userID);
             const userData = users[userID];
-            const followers = userData.followers || [];
-            const following = userData.following || [];
+            const followers = userData.followers ? Object.keys(userData.followers) : [];
+            const following = userData.following ? Object.keys(userData.following) : [];
             const followersToken = [];
             const followingTokens = [];
-
+    
             for (const followerID of followers) {
               const followerSnapshot = await admin.database().ref(`Users/${followerID}`).once("value");
               const followerData = followerSnapshot.val();
               const followerToken = followerData?.settings?.notifications?.deviceToken || null;
-
+    
               if (followerToken) {
                 followersToken.push(followerToken);
               }
             }
-
+    
             for (const followingID of following) {
               const followingSnapshot = await admin.database().ref(`Users/${followingID}`).once("value");
               const followingData = followingSnapshot.val();
               const followingToken = followingData?.settings?.notifications?.deviceToken || null;
-
+    
               if (followingToken) {
                 followingTokens.push(followingToken);
               }
             }
-
+    
             usersInformation[userID] = {
-              myToken: userData.settings.notifications.deviceToken || null,
+              myToken: userData.settings?.notifications?.deviceToken || null,
               friendsToken: followersToken.concat(followingTokens),
             };
           }
@@ -117,28 +118,20 @@ exports.updateTokenAndFollowers = onValueUpdated({
   const beforeData = event.data.before.val();
   const afterData = event.data.after.val();
 
-  const beforeFollowing = beforeData.following || [];
-  const afterFollowing = afterData.following || [];
+  const beforeFollowing = beforeData.following ? Object.keys(beforeData.following) : [];
+  const afterFollowing = afterData.following ? Object.keys(afterData.following) : [];
   const userToken = afterData.settings?.notifications?.deviceToken || null;
 
   const newFollowing = afterFollowing.filter((id) => !beforeFollowing.includes(id));
 
   const getTokens = async (userIDs) => {
-    const tokens = [];
-    for (const userID of userIDs) {
-      try {
-        const userSnapshot = await admin
-          .database()
-          .ref(`Users/${userID}/settings/notifications/deviceToken`)
-          .once("value");
-        const token = userSnapshot.val();
-        if (token) tokens.push(token);
-      } catch (error) {
-        console.error(`Error fetching token for user ${userID}:`, error);
-      }
-    }
-    return tokens;
+    const promises = userIDs.map((id) =>
+      admin.database().ref(`Users/${id}/settings/notifications/deviceToken`).once("value")
+    );
+    const snapshots = await Promise.all(promises);
+    return snapshots.map((snap) => snap.val()).filter((token) => token);
   };
+  
 
   try {
     const followingTokens = await getTokens(afterFollowing);
@@ -167,8 +160,8 @@ exports.notifyMessage = onValueUpdated({
 }, async (event) => {
   await initializeUsersInformation();
   const chatListId = event.params.chatListId;
-  const beforeMessages = event.data.before.child("messages").val() || {};
-  const afterMessages = event.data.after.child("messages").val() || {};
+  const beforeMessages = event.data.before.child("Messages").val() || {};
+  const afterMessages = event.data.after.child("Messages").val() || {};
 
   const beforeMessageKeys = Object.keys(beforeMessages);
   const afterMessageKeys = Object.keys(afterMessages);
@@ -184,7 +177,7 @@ exports.notifyMessage = onValueUpdated({
         const messageSender = message.sender;
         const messageRecipient = message.recipient;
         const messageSeen = message.seen;
-        const messageBody = message.message;
+        const messageBody = message.text;
 
         if (!messageSeen) {
           if (usersInformation[messageRecipient]) {
@@ -233,22 +226,7 @@ exports.notifyMessage = onValueUpdated({
   return null;
 });
 
-async function sendNotification(tokens, notification) {
-  const payload = {
-    notification: {
-      title: notification.title,
-      body: notification.body,
-      clickAction: "FLUTTER_NOTIFICATION_CLICK",
-    },
-    data: notification.data,
-  };
-  try {
-    const response = await admin.messaging().sendToDevice(tokens, payload);
-    console.log("Notifications sent successfully:", response);
-  } catch (error) {
-    console.error("Error sending notifications:", error);
-  }
-}
+
 
 // Notify meme
 exports.notifyMeme = onValueUpdated({
@@ -259,11 +237,11 @@ exports.notifyMeme = onValueUpdated({
 
   const beforeData = event.data.before.val();
   const afterData = event.data.after.val();
-  const userId = afterData.userId || null;
-  const beforeLikes = beforeData.likes || [];
-  const afterLikes = afterData.likes || [];
-  const beforeComments = beforeData.comments || [];
-  const afterComments = afterData.comments || [];
+  const userId = afterData.userID || null;
+  const beforeLikes = beforeData.likes ? Object.keys(beforeData.likes) : [];
+  const afterLikes = afterData.likes ? Object.keys(afterData.likes) : [];
+  const beforeComments = beforeData.comments ? Object.keys(beforeData.comments) : [];
+  const afterComments = afterData.comments ? Object.keys(afterData.comments) : [];
   const beforeShare = beforeData.totalShare || 0;
   const afterShare = afterData.totalShare || 0;
 
@@ -378,5 +356,21 @@ async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
     }
   } catch (error) {
     console.error(`Error notifying user ${userId} about meme ${memeID}:`, error);
+  }
+}
+async function sendNotification(tokens, notification) {
+  const payload = {
+    notification: {
+      title: notification.title,
+      body: notification.body,
+      clickAction: "FLUTTER_NOTIFICATION_CLICK",
+    },
+    data: notification.data,
+  };
+  try {
+    const response = await admin.messaging().sendToDevice(tokens, payload);
+    console.log("Notifications sent successfully:", response);
+  } catch (error) {
+    console.error("Error sending notifications:", error);
   }
 }

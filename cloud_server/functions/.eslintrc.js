@@ -14,6 +14,11 @@ module.exports = {
     "no-restricted-globals": ["error", "name", "length"],
     "prefer-arrow-callback": "error",
     "quotes": ["error", "double", {"allowTemplateLiterals": true}],
+    "max-len": ["error", { code: 120 }],
+    "spaced-comment": "off",
+    "prefer-const": "off",
+    "guard-for-in": "off",
+    "padded-blocks": "off",
   },
   overrides: [
     {
@@ -26,3 +31,4 @@ module.exports = {
   ],
   globals: {},
 };
+

@@ -1,23 +1,23 @@
-const functions = require("firebase-functions/v2");
 const admin = require("firebase-admin");
-const { onValueCreated, onValueUpdated } = require("firebase-functions/v2/database");
+const { onValueUpdated } = require("firebase-functions/v2/database");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
 
 let usersInformation = {};
 
 // Populate initial data
-exports.populateInitialData = functions.https.onRequest(async (req, res) => {
+exports.populateInitialData = onSchedule("every 1 minutes", async () => {
   try {
     const usersSnapshot = await admin.database().ref("Users").once("value");
     const users = usersSnapshot.val();
-    console.log("Users", users);
+
     for (const userID in users) {
       if (Object.prototype.hasOwnProperty.call(users, userID)) {
         console.log("User ID:", userID);
         const userData = users[userID];
-        const followers = userData.followers || [];
-        const following = userData.following || [];
+        const followers = userData.followers ? Object.keys(userData.followers) : [];
+        const following = userData.following ? Object.keys(userData.following) : [];
         const followersToken = [];
         const followingTokens = [];
 
@@ -42,18 +42,15 @@ exports.populateInitialData = functions.https.onRequest(async (req, res) => {
         }
 
         usersInformation[userID] = {
-          myToken: userData.settings.notifications.deviceToken || null,
+          myToken: userData.settings?.notifications?.deviceToken || null,
           friendsToken: followersToken.concat(followingTokens),
         };
       }
     }
 
     console.log("Initial data populated:", usersInformation);
-
-    res.status(200).send("Initial data populated successfully.");
   } catch (error) {
     console.error("Error populating initial data:", error);
-    res.status(500).send("Error populating initial data.");
   }
 });
 
@@ -65,28 +62,20 @@ exports.updateTokenAndFollowers = onValueUpdated({
   const beforeData = event.data.before.val();
   const afterData = event.data.after.val();
 
-  const beforeFollowing = beforeData.following || [];
-  const afterFollowing = afterData.following || [];
+  const beforeFollowing = beforeData.following ? Object.keys(beforeData.following) : [];
+  const afterFollowing = afterData.following ? Object.keys(afterData.following) : [];
   const userToken = afterData.settings?.notifications?.deviceToken || null;
 
   const newFollowing = afterFollowing.filter((id) => !beforeFollowing.includes(id));
 
   const getTokens = async (userIDs) => {
-    const tokens = [];
-    for (const userID of userIDs) {
-      try {
-        const userSnapshot = await admin
-          .database()
-          .ref(`Users/${userID}/settings/notifications/deviceToken`)
-          .once("value");
-        const token = userSnapshot.val();
-        if (token) tokens.push(token);
-      } catch (error) {
-        console.error(`Error fetching token for user ${userID}:`, error);
-      }
-    }
-    return tokens;
+    const promises = userIDs.map((id) =>
+      admin.database().ref(`Users/${id}/settings/notifications/deviceToken`).once("value")
+    );
+    const snapshots = await Promise.all(promises);
+    return snapshots.map((snap) => snap.val()).filter((token) => token);
   };
+  
 
   try {
     const followingTokens = await getTokens(afterFollowing);
@@ -111,11 +100,11 @@ exports.updateTokenAndFollowers = onValueUpdated({
 
 // Notify message
 exports.notifyMessage = onValueUpdated({
-  ref: "Messages/{chatListId}"
+  ref: "Chats/{chatListId}"
 }, async (event) => {
   const chatListId = event.params.chatListId;
-  const beforeMessages = event.data.before.child("messages").val() || {};
-  const afterMessages = event.data.after.child("messages").val() || {};
+  const beforeMessages = event.data.before.child("Messages").val() || {};
+  const afterMessages = event.data.after.child("Messages").val() || {};
 
   const beforeMessageKeys = Object.keys(beforeMessages);
   const afterMessageKeys = Object.keys(afterMessages);
@@ -131,7 +120,7 @@ exports.notifyMessage = onValueUpdated({
         const messageSender = message.sender;
         const messageRecipient = message.recipient;
         const messageSeen = message.seen;
-        const messageBody = message.message;
+        const messageBody = message.text;
 
         if (!messageSeen) {
           if (usersInformation[messageRecipient]) {
@@ -205,11 +194,11 @@ exports.notifyMeme = onValueUpdated({
 
   const beforeData = event.data.before.val();
   const afterData = event.data.after.val();
-  const userId = afterData.userId || null;
-  const beforeLikes = beforeData.likes || [];
-  const afterLikes = afterData.likes || [];
-  const beforeComments = beforeData.comments || [];
-  const afterComments = afterData.comments || [];
+  const userId = afterData.userID || null;
+  const beforeLikes = beforeData.likes ? Object.keys(beforeData.likes) : [];
+  const afterLikes = afterData.likes ? Object.keys(afterData.likes) : [];
+  const beforeComments = beforeData.comments ? Object.keys(beforeData.comments) : [];
+  const afterComments = afterData.comments ? Object.keys(afterData.comments) : [];
   const beforeShare = beforeData.totalShare || 0;
   const afterShare = afterData.totalShare || 0;
 

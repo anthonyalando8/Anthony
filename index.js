@@ -1,95 +1,126 @@
+const functions = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const { onValueUpdated } = require("firebase-functions/v2/database");
-const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
 
 let usersInformation = {};
 
-// Populate initial data
-exports.populateInitialData = onSchedule("every 1 minutes", async () => {
+async function getUserInformation(ID) {
   try {
-    const usersSnapshot = await admin.database().ref("Users").once("value");
-    const users = usersSnapshot.val();
+    const userSnapshot = await admin.database().ref(`Users/${ID}`).once("value");
+    const userData = userSnapshot.val();
+    if (!userData) {
+      console.error(`User data for ID ${ID} is null or undefined.`);
+      return { myToken: null, friendsToken: [] };
+    }
+    
+    const userID = userSnapshot.key;
 
-    for (const userID in users) {
-      if (Object.prototype.hasOwnProperty.call(users, userID)) {
-        console.log("User ID:", userID);
-        const userData = users[userID];
-        const followers = userData.followers ? Object.keys(userData.followers) : [];
-        const following = userData.following ? Object.keys(userData.following) : [];
-        const followersToken = [];
-        const followingTokens = [];
+    console.log("User ID:", userID);
+    const userName = userData.username || null;
 
-        for (const followerID of followers) {
-          const followerSnapshot = await admin.database().ref(`Users/${followerID}`).once("value");
-          const followerData = followerSnapshot.val();
-          const followerToken = followerData?.settings?.notifications?.deviceToken || null;
+    // const followers = userData.followers ? Object.keys(userData.followers) : [];
+    // const following = userData.following ? Object.keys(userData.following) : [];
 
-          if (followerToken) {
-            followersToken.push(followerToken);
-          }
-        }
+    // TODO: Fetch tokens concurrently using the helper function
+    // const followersToken = await getTokens(followers);
+    // const followingTokens = await getTokens(following);
+    const followersToken = [];
+    const followingTokens = [];
 
-        for (const followingID of following) {
-          const followingSnapshot = await admin.database().ref(`Users/${followingID}`).once("value");
-          const followingData = followingSnapshot.val();
-          const followingToken = followingData?.settings?.notifications?.deviceToken || null;
+    // Combine and deduplicate tokens
+    const friendsToken = [...new Set([...followersToken, ...followingTokens])];
+    const myToken = userData.settings?.notifications?.deviceToken || null;
 
-          if (followingToken) {
-            followingTokens.push(followingToken);
-          }
-        }
-
-        usersInformation[userID] = {
-          myToken: userData.settings?.notifications?.deviceToken || null,
-          friendsToken: followersToken.concat(followingTokens),
-        };
-      }
+    // Assuming `usersInformation` is defined elsewhere
+    if (typeof usersInformation === "object") {
+      usersInformation[userID] = {
+        myToken: myToken,
+        username: userName,
+        friendsToken: friendsToken,
+      };
     }
 
-    console.log("Initial data populated:", usersInformation);
+    return {
+      myToken:myToken,
+      username:userName,
+      friendsToken:friendsToken,
+    };
   } catch (error) {
-    console.error("Error populating initial data:", error);
+    console.error("Error fetching user information:", error);
+    throw error;
   }
-});
+}
+// TODO: Fetch followers' tokens and implement notifications for them.
+async function getTokens(userIDs) {
+  const promises = userIDs.map((id) =>
+    admin.database().ref(`Users/${id}/settings/notifications/deviceToken`).once("value")
+  );
+  const results = await Promise.allSettled(promises);
+  const successfulTokens = results
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value.val());
+  return successfulTokens;
+}
+
 
 // Update token and followers
 exports.updateTokenAndFollowers = onValueUpdated({
   ref: "Users/{userID}"
 }, async (event) => {
+
+  if (!event.data || !event.data.before.exists() || !event.data.after.exists()) {
+    console.warn("No data exists for the event trigger.");
+    return null;
+  }
+  
   const userID = event.params.userID;
   const beforeData = event.data.before.val();
   const afterData = event.data.after.val();
+  const userName = afterData.username || null;
 
   const beforeFollowing = beforeData.following ? Object.keys(beforeData.following) : [];
   const afterFollowing = afterData.following ? Object.keys(afterData.following) : [];
+  const beforeFollowers = beforeData.followers ? Object.keys(beforeData.followers) : [];
+  const afterFollowers = afterData.followers ? Object.keys(afterData.followers) : [];
   const userToken = afterData.settings?.notifications?.deviceToken || null;
 
   const newFollowing = afterFollowing.filter((id) => !beforeFollowing.includes(id));
-
-  const getTokens = async (userIDs) => {
-    const promises = userIDs.map((id) =>
-      admin.database().ref(`Users/${id}/settings/notifications/deviceToken`).once("value")
-    );
-    const snapshots = await Promise.all(promises);
-    return snapshots.map((snap) => snap.val()).filter((token) => token);
-  };
-  
+  // const newFollowers = afterFollowers.filter((id) => !beforeFollowers.includes(id));
 
   try {
-    const followingTokens = await getTokens(afterFollowing);
+    let newFollowingTokens = await getTokens(newFollowing);
+    // let newFollowersTokens = await getTokens(afterFollowers);
+    const newFollowersTokens = [];
+
+    
+    if (newFollowing.length > 0) {
+      console.log("New following IDs:", newFollowing);
+      const notification = {
+        title: "New Follower",
+        body: `${userName} is now following you.`,
+      
+        data: {
+          type: "follow",
+          userId: userID,
+          timestamp: Date.now().toString(),
+        },
+      };
+      try {
+        await sendNotification(newFollowingTokens, notification);
+        console.log(`Notification sent to user ${userID} for new followers.`);
+      } catch (error) {
+        console.error("Notification failed:", error);
+      }
+      
+    }
+    const friendsToken = [...new Set([...newFollowersTokens, ...newFollowingTokens])];
 
     usersInformation[userID] = {
       myToken: userToken,
-      friendsToken: followingTokens,
+      friendsToken: friendsToken,
     };
-    if (newFollowing.length > 0) {
-      console.log("New following IDs:", newFollowing);
-    } else {
-      console.log("No new following IDs were added.");
-    }
-
     console.log(`Updated tokens for user ${userID}:`, usersInformation[userID]);
   } catch (error) {
     console.error(`Error updating tokens for user ${userID}:`, error);
@@ -121,38 +152,50 @@ exports.notifyMessage = onValueUpdated({
         const messageRecipient = message.recipient;
         const messageSeen = message.seen;
         const messageBody = message.text;
-
+        
         if (!messageSeen) {
+          let token = null;
+          // const token = usersInformation[userID]?.myToken || (await getUserInformation(userID)).myToken;
+
           if (usersInformation[messageRecipient]) {
-            const token = usersInformation[messageRecipient].myToken;
-
-            if (token) {
-              const tokens = [token];
-              const notification = {
-                title: "New message",
-                body: `You have a new message: ${messageBody}`,
+            token = usersInformation[messageRecipient].myToken;
+          } else {
+            console.warn(
+              `User information not found for recipient ${messageRecipient} in userInformation`
+            );
+            const userInfo = await getUserInformation(messageRecipient);
+            console.log("userInfo", userInfo);
+            token = userInfo.myToken;
+            
+          }
+          if(token){
+            const tokens = [token];
+            const senderInfo = await getUserInformation(messageSender);
+            const senderName = senderInfo.username;
+            const notification = {
+              title: senderName,
+              body: `New message: ${messageBody}`,
+              data: {
+                chatListId: chatListId,
+                messageID: messageID,
+                type: "message",
                 sender: messageSender,
-                timestamp: Date.now(),
-                data: {
-                  chatListId: chatListId,
-                  messageID: messageID,
-                  type: "message",
-                },
-              };
+                recipient: messageRecipient,
+                timestamp: Date.now().toString(),
+              },
+            };
 
+            try {
               await sendNotification(tokens, notification);
               console.log(
                 `Notification sent to user ${messageRecipient} for message ${messageID} from ${messageSender}.`
               );
-            } else {
-              console.warn(
-                `No token found for recipient ${messageRecipient}. Notification skipped.`
-              );
+            } catch (error) {
+              console.error("Notification failed:", error);
             }
-          } else {
-            console.warn(
-              `User information not found for recipient ${messageRecipient}. Notification skipped.`
-            );
+          }else{
+            console.warn(`No token found for user ${messageRecipient}. Skipping notification.`);
+            return null;
           }
         }
       }
@@ -169,22 +212,7 @@ exports.notifyMessage = onValueUpdated({
   return null;
 });
 
-async function sendNotification(tokens, notification) {
-  const payload = {
-    notification: {
-      title: notification.title,
-      body: notification.body,
-      clickAction: "FLUTTER_NOTIFICATION_CLICK",
-    },
-    data: notification.data,
-  };
-  try {
-    const response = await admin.messaging().sendToDevice(tokens, payload);
-    console.log("Notifications sent successfully:", response);
-  } catch (error) {
-    console.error("Error sending notifications:", error);
-  }
-}
+
 
 // Notify meme
 exports.notifyMeme = onValueUpdated({
@@ -215,39 +243,40 @@ exports.notifyMeme = onValueUpdated({
       console.warn(`No userId found for meme ${memeID}. Skipping notification.`);
       return null;
     }
-
+    let token = null;
     if (usersInformation[userId]) {
-      const token = usersInformation[userId].myToken;
-
-      if (!token) {
-        console.warn(`No token found for user ${userId}. Skipping notification.`);
-        return null;
-      }
-
-      const tokens = [token];
-
-      if (newShares > 0) {
-        console.log(`Meme ${memeID} received ${newShares} new shares.`);
-        await notifyMemeUser(userId, tokens, memeID, "shares", newShares);
-      }
-
-      if (totalNewLikes > 0) {
-        console.log(
-          `Meme ${memeID} received ${totalNewLikes} new likes from: ${newLikes.join(", ")}`
-        );
-        await notifyMemeUser(userId, tokens, memeID, "likes", totalNewLikes, newLikes);
-      }
-
-      if (totalNewComments > 0) {
-        console.log(
-          `Meme ${memeID} received ${totalNewComments} new comments from: ${newComments.join(", ")}`
-        );
-        await notifyMemeUser(userId, tokens, memeID, "comments", totalNewComments, newComments);
-      }
+      token = usersInformation[userId].myToken;
     } else {
       console.warn(
-        `User information for userId ${userId} not found in usersInformation. Skipping notification.`
+        `User information not found for memer ${userId} in userInformation`
       );
+      token = (await getUserInformation(userId)).myToken;
+    }
+
+    if (!token) {
+      console.warn(`No token found for user ${userId}. Skipping notification.`);
+      return null;
+    }
+
+    const tokens = [token];
+
+    if (newShares > 0) {
+      console.log(`Meme ${memeID} received ${newShares} new shares.`);
+      await notifyMemeUser(userId, tokens, memeID, "shares", newShares);
+    }
+
+    if (totalNewLikes > 0) {
+      console.log(
+        `Meme ${memeID} received ${totalNewLikes} new likes from: ${newLikes.join(", ")}`
+      );
+      await notifyMemeUser(userId, tokens, memeID, "likes", totalNewLikes, newLikes);
+    }
+
+    if (totalNewComments > 0) {
+      console.log(
+        `Meme ${memeID} received ${totalNewComments} new comments from: ${newComments.join(", ")}`
+      );
+      await notifyMemeUser(userId, tokens, memeID, "comments", totalNewComments, newComments);
     }
   } catch (error) {
     console.error(`Error processing meme update for ${memeID}:`, error);
@@ -268,7 +297,7 @@ async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
       type: type,
       count: count,
       userIds: ids,
-      timestamp: Date.now(),
+      timestamp: Date.now().toString(),
     };
 
     let title = "";
@@ -293,25 +322,55 @@ async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
 
     await admin.database().ref(`Notifications/${userId}`).push(notification);
 
-    const payload = {
-      notification: {
-        title: title,
-        body: message,
-        clickAction: "FLUTTER_NOTIFICATION_CLICK",
-      },
+    const notify = {
+      title: title,
+      body: message,
       data: {
         type: type,
         memeID: memeID,
       },
-    };
+    }
 
+    await sendNotification(tokens, notify);
+
+  } catch (error) {
+    console.error(`Error notifying user ${userId} about meme ${memeID}:`, error);
+  }
+}
+async function sendNotification(tokens, notification) {
+  const message = {
+    notification: {
+      title: notification.title,
+      body: notification.body,
+    },
+    data: notification.data, // Custom data (optional)
+  };
+
+  try {
+    // Check if there are tokens to send notifications to
     if (tokens.length > 0) {
-      const response = await admin.messaging().sendToDevice(tokens, payload);
-      console.log("Notifications sent successfully:", response);
+      // Using sendEach() to send individual messages
+      try {
+        const responses = await admin.messaging().sendEach(tokens.map(token => ({
+          ...message,
+          token,  // Assigning each token to the notification payload
+        })));
+
+        // Logging the responses to check success/failure
+        console.log("Notifications sent successfully:", responses.responses);
+
+        responses.responses.forEach((response, idx) => {
+          if (!response.success) {
+            console.error(`Failed to send notification to token: ${tokens[idx]}`);
+          }
+        });
+      } catch (error) {
+        console.error("Error sending notifications:", error);
+      }
     } else {
       console.log("No tokens available to send notifications.");
     }
   } catch (error) {
-    console.error(`Error notifying user ${userId} about meme ${memeID}:`, error);
+    console.error("Error sending notifications:", error);
   }
 }

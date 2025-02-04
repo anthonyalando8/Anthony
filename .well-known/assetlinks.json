@@ -2,11 +2,13 @@
   "relation": ["delegate_permission/common.handle_all_urls"],
   "target": {
     "namespace": "android_app",
-    "package_name": "com.example.memes_app",
+    "package_name": "com.trend.memeapp",
     "sha256_cert_fingerprints":
     [
       "80:31:15:3D:33:82:CC:1F:33:EE:29:B0:6D:51:D8:8D:CA:23:42:AE:66:99:C0:16:BB:8B:78:89:67:40:92:11",
-      "2F:33:02:CC:C0:FE:B8:ED:1F:C0:F1:0A:D6:48:B1:A7:19:7B:43:D3:53:83:7D:6A:A2:12:55:C9:19:62:B8:88"
+      "2F:33:02:CC:C0:FE:B8:ED:1F:C0:F1:0A:D6:48:B1:A7:19:7B:43:D3:53:83:7D:6A:A2:12:55:C9:19:62:B8:88",
+      "CB:A8:07:49:4A:38:98:4F:B8:E9:1F:C8:0E:21:3F:26:58:34:4E:44",
+       "DA:41:03:44:11:A0:A0:4B:4D:CB:B3:BE:2A:57:67:E0:CD:49:47:17:11:7D:B2:98:79:7E:B7:F5:CA:89:5B:FE"
     ]
   }
 }]

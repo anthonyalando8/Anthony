@@ -175,7 +175,7 @@ exports.notifyMessage = onValueUpdated({
           const senderName = senderInfo.username;
           const notification = {
             title: senderName,
-            body: `New message: ${messageBody}`,
+            body: `Message: ${messageBody}`,
             data: {
               chatListId: chatListId,
               messageID: messageID,
@@ -300,21 +300,24 @@ async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
     let title = "";
     let message = "";
 
+    const senderInfo = await getUserInformation(ids[0]);
+    const senderName = senderInfo.username;
+
     if (type === "likes") {
-      title = "New Likes";
+      title = "New Like";
       message = count > 5
         ? `Your post is getting noticed! You have ${count} likes.`
-        : "Your meme got liked!";
+        : `${senderName} liked your meme. Click to open.`;
     } else if (type === "comments") {
       title = "New Comments";
       message = count > 5
         ? `People are commenting on your post! You have ${count} new comments.`
-        : "You got new comments on your post.";
+        : `${senderName} commented on your meme.`;
     } else if (type === "shares") {
       title = "New Shares";
       message = count > 5
         ? "People are sharing your meme! Check it out again."
-        : "Someone shared your meme post. View it.";
+        : `${senderName} shared your meme. View it.`;
     }
 
     await admin.database().ref(`Notifications/${userId}`).push(notification);

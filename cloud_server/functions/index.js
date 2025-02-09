@@ -1,6 +1,7 @@
 const functions = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const { onValueUpdated } = require("firebase-functions/v2/database");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
 
@@ -273,7 +274,12 @@ exports.notifyMeme = onValueUpdated({
       console.log(
         `Meme ${memeID} received ${totalNewComments} new comments from: ${newComments.join(", ")}`
       );
-      await notifyMemeUser(userId, tokens, memeID, "comments", totalNewComments, newComments);
+          // Retrieve the uid for each new comment
+      const newCommentUids = newComments.map((commentId) => afterData.comments[commentId]?.uid);
+
+      // Filter out any undefined values (in case some comments don’t have a uid)
+      const validNewCommentUids = newCommentUids.filter(uid => uid !== undefined);
+      await notifyMemeUser(userId, tokens, memeID, "comments", totalNewComments, validNewCommentUids);
     }
   } catch (error) {
     console.error(`Error processing meme update for ${memeID}:`, error);
@@ -281,7 +287,58 @@ exports.notifyMeme = onValueUpdated({
 
   return null;
 });
+exports.notifyUnreadNotification = onSchedule("every 6 hours", async (event) => {
+    try {
+      console.log("Running notifyUnreadNotification function.");
 
+      // Fetch all notifications from the database
+      const snapshot = await admin.database().ref("Notifications").once("value");
+
+      if (!snapshot.exists()) {
+        console.log("No notifications found.");
+        return null;
+      }
+
+      const notifications = snapshot.val();
+
+      for (const [userId, userNotifications] of Object.entries(notifications)) {
+        let total_unread = 0;
+
+        for (const [_, notification] of Object.entries(userNotifications)) {
+          const seen = notification.seen || null;
+          if (seen == null || seen === false) {
+            total_unread++;
+          }
+        }
+
+        if (total_unread > 0) {
+          // Fetch user token
+          const userInfo = await getUserInformation(userId);
+          const token = userInfo?.myToken;
+
+          if (token) {
+            const notification = {
+              title: "Unread Notifications",
+              body: `You have ${total_unread} unread notifications, click view notifications.`,
+              data: {
+                type: "unread-notifications",
+                recipient: userId,
+                timestamp: Date.now().toString(),
+              },
+            };
+
+            // Send push notification using Firebase Cloud Messaging
+            await sendNotification([token],notification )
+            console.log(`Notification sent to user ${userId}`);
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Error in notifyUnreadNotification:", error);
+    }
+  });
 async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
   try {
     console.log(`Notifying user about ${count} new ${type} for meme ${memeID}.`);
@@ -299,9 +356,13 @@ async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
 
     let title = "";
     let message = "";
+    let senderName = "";
+    if(type === "likes" || type === "comments" && ids.length > 0) {
+      const senderInfo = await getUserInformation(ids[0]);
+      senderName = senderInfo.username;
+    }
 
-    const senderInfo = await getUserInformation(ids[0]);
-    const senderName = senderInfo.username;
+    
 
     if (type === "likes") {
       title = "New Like";
@@ -309,15 +370,15 @@ async function notifyMemeUser(userId, tokens, memeID, type, count, ids = []) {
         ? `Your post is getting noticed! You have ${count} likes.`
         : `${senderName} liked your meme. Click to open.`;
     } else if (type === "comments") {
-      title = "New Comments";
+      title = "New Comment";
       message = count > 5
         ? `People are commenting on your post! You have ${count} new comments.`
         : `${senderName} commented on your meme.`;
     } else if (type === "shares") {
-      title = "New Shares";
+      title = "Meme shared";
       message = count > 5
         ? "People are sharing your meme! Check it out again."
-        : `${senderName} shared your meme. View it.`;
+        : `Your meme got shared. View it.`;
     }
 
     await admin.database().ref(`Notifications/${userId}`).push(notification);
